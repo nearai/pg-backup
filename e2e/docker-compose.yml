@@ -1,0 +1,92 @@
+# End-to-end harness: a stand-in "cluster" (postgres:16-alpine + a mock
+# Patroni role endpoint), MinIO as S3, the built pg-backup image as the
+# backup sidecar, and a second postgres instance for the restore drill.
+# BACKUP_KEY_SOURCE=env replaces the dstack GetKey socket (no TEE here);
+# everything else runs the production code paths. Driven by ./run.sh.
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:a5074487380d4e686036ce61ed6f2d363939ae9a0c40123d1a9e3bb3a5f344b4
+    environment:
+      POSTGRES_PASSWORD: e2e-source-pw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  patroni-mock:
+    image: pg-backup-e2e
+    entrypoint: ["/e2e/patroni-mock.sh"]
+    volumes:
+      - ./patroni-mock.sh:/e2e/patroni-mock.sh:ro
+
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: e2eaccesskey
+      MINIO_ROOT_PASSWORD: e2esecretkey
+
+  pg-backup:
+    image: pg-backup-e2e
+    depends_on:
+      - postgres
+      - patroni-mock
+      - minio
+    environment:
+      BACKUP_S3_BUCKET: pg-backup-e2e
+      BACKUP_AWS_ACCESS_KEY_ID: e2eaccesskey
+      BACKUP_AWS_SECRET_ACCESS_KEY: e2esecretkey
+      BACKUP_AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://minio:9000
+      AWS_CONFIG_FILE: /e2e/aws-config
+      BACKUP_KEY_SOURCE: env
+      BACKUP_ENCRYPTION_KEY: 6a0fdd6ef22705f4b092d3a5b30291c1e2e5f21be22f5a29869a5b28c7f2a7d3
+      BACKUP_PG_HOST: postgres
+      BACKUP_PATRONI_HOST: patroni-mock
+      BACKUP_INTERVAL_SECONDS: "5"
+      BACKUP_TICK_SECONDS: "2"
+      BACKUP_JITTER_SECONDS: "0"
+      BACKUP_HEARTBEAT_SECONDS: "5"
+      BACKUP_RETRY_DELAY_SECONDS: "5"
+      BACKUP_ENV_NAME: e2e
+    volumes:
+      - ./.state/setup:/setup:ro
+      - ./aws-config:/e2e/aws-config:ro
+    tmpfs:
+      - /run/backup:size=64m,mode=0700
+
+  restore-pg:
+    image: postgres:16-alpine@sha256:a5074487380d4e686036ce61ed6f2d363939ae9a0c40123d1a9e3bb3a5f344b4
+    environment:
+      POSTGRES_PASSWORD: e2e-restore-pw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  restore-driver:
+    image: pg-backup-e2e
+    profiles: ["restore"]
+    depends_on:
+      - restore-pg
+      - minio
+    environment:
+      PG_BACKUP_MODE: restore
+      RESTORE_S3_BUCKET: pg-backup-e2e
+      RESTORE_AWS_ACCESS_KEY_ID: e2eaccesskey
+      RESTORE_AWS_SECRET_ACCESS_KEY: e2esecretkey
+      RESTORE_AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://minio:9000
+      AWS_CONFIG_FILE: /e2e/aws-config
+      BACKUP_KEY_SOURCE: env
+      BACKUP_ENCRYPTION_KEY: 6a0fdd6ef22705f4b092d3a5b30291c1e2e5f21be22f5a29869a5b28c7f2a7d3
+      RESTORE_PG_HOST: restore-pg
+      RESTORE_PG_PASSWORD: e2e-restore-pw
+      RESTORE_BUCKET_CHECK: "false"
+      RESTORE_MANIFEST_KEY: ${RESTORE_MANIFEST_KEY:-}
+      DRILL_ID: ${DRILL_ID:-e2e-drill}
+    volumes:
+      - ./aws-config:/e2e/aws-config:ro

@@ -1,0 +1,5 @@
+# MinIO needs path-style S3 addressing (virtual-host style would resolve
+# <bucket>.minio, which docker DNS cannot).
+[default]
+s3 =
+    addressing_style = path
