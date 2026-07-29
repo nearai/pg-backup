@@ -99,6 +99,9 @@ done
     || fail "manifest cloud-api migration version != 63"
 [[ "$(jq -r '.databases[] | select(.name == "chat_api") | .migrations.row_count' <<<"$MANIFEST")" == "33" ]] \
     || fail "manifest chat-api migration rows != 33"
+ENC_FMT=$(jq -r '.databases[] | select(.name == "chat_api") | .validation.encrypted_format."agent_instances.token" | "\(.total)/\(.wellformed)"' <<<"$MANIFEST")
+[[ "$ENC_FMT" == "9/8" ]] \
+    || fail "manifest encrypted_format for agent_instances.token != 9/8 (got ${ENC_FMT})"
 
 echo "[e2e] Independent decrypt + checksum + pg_restore --list..."
 "${COMPOSE[@]}" exec -T "${AWSENV[@]}" pg-backup bash -c "
@@ -139,6 +142,8 @@ FAILED_CHECKS=$(jq -r '[.checks[] | select(.pass | not) | .id] | join(", ")' <<<
 echo "[e2e] Drill verdict: ${VERDICT} (exit ${DRILL_RC}) checks: $(jq '.checks | length' <<<"$REPORT")"
 [[ "$VERDICT" == "PASS" && "$DRILL_RC" -eq 0 ]] \
     || fail "drill FAIL (rc=${DRILL_RC}); failed checks: ${FAILED_CHECKS:-none}"
+[[ "$(jq -r '.checks[] | select(.id == "chat_api.encrypted_columns_fidelity") | .pass' <<<"$REPORT")" == "true" ]] \
+    || fail "encrypted-columns fidelity check missing or failed"
 
 echo "[e2e] Source vs restored count diff..."
 for spec in "postgres:organizations" "postgres:users" "chat_api:users" \

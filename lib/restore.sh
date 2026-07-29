@@ -196,6 +196,125 @@ valid_identifier() {
 }
 
 # ---------------------------------------------------------------------------
+# Spilo-artifact tolerance
+#
+# Production dumps come from Spilo-16 clusters; the drill restores onto a
+# vanilla postgres:16 instance. Spilo bakes in extensions and housekeeping
+# schemas that vanilla does not ship, so pg_restore predictably fails on
+# those objects HERE while a real DR restore (onto Spilo, where they exist)
+# would not. Missing-object errors whose identifier matches this whitelist
+# are TOLERATED: counted separately and excluded from the pass/fail
+# decision. Everything else still fails the check. Only these whitelisted
+# identifiers (infra metadata, never row data) may appear in the report.
+# ---------------------------------------------------------------------------
+SPILO_ARTIFACT_EXTENSIONS=(bg_mon pg_auth_mon pg_cron pg_stat_kcache set_user
+    pg_permissions file_fdw pg_stat_statements)
+SPILO_ARTIFACT_SCHEMAS=(metric_helpers user_management robot_zmon zalando admin)
+
+# spilo_artifact_tolerated <kind> <identifier> → 0 if whitelisted.
+#   extension        — exact match against SPILO_ARTIFACT_EXTENSIONS
+#   schema, role     — exact match against SPILO_ARTIFACT_SCHEMAS (Spilo's
+#                      admin/robot_zmon/zalando exist as roles too)
+#   function, relation — qualified name inside a whitelisted schema
+spilo_artifact_tolerated() {
+    local kind="$1" name="$2" w
+    case "$kind" in
+        extension)
+            for w in "${SPILO_ARTIFACT_EXTENSIONS[@]}"; do
+                [[ "$name" == "$w" ]] && return 0
+            done
+            ;;
+        schema | role)
+            for w in "${SPILO_ARTIFACT_SCHEMAS[@]}"; do
+                [[ "$name" == "$w" ]] && return 0
+            done
+            ;;
+        function | relation)
+            for w in "${SPILO_ARTIFACT_SCHEMAS[@]}"; do
+                [[ "$name" == "$w".* ]] && return 0
+            done
+            ;;
+    esac
+    return 1
+}
+
+# Classify the error lines of a captured pg_restore/psql stderr file into
+# tolerated (whitelisted Spilo missing objects) vs blocking. Only actual
+# error lines ('pg_restore: error:' anywhere, or a line starting 'ERROR:')
+# are counted — cascading DETAIL/HINT/LINE context lines are not errors.
+# The file stays in the CVM; raw lines are NEVER emitted. Results:
+#   RESTORE_ERR_TOTAL / RESTORE_ERR_TOLERATED / RESTORE_ERR_BLOCKING
+#   RESTORE_ERR_TOLERATED_IDS — deduped "kind identifier" entries, one per
+#   line, whitelist-matched only (safe for the report).
+restore_classify_errors() {
+    local file="$1"
+    RESTORE_ERR_TOTAL=0
+    RESTORE_ERR_TOLERATED=0
+    RESTORE_ERR_BLOCKING=0
+    RESTORE_ERR_TOLERATED_IDS=""
+    [[ -s "$file" ]] || return 0
+
+    # "is not available" is what CREATE EXTENSION emits when the extension
+    # files are absent from the server (the vanilla-image case); COMMENT ON /
+    # DROP emit "does not exist" for the same root cause.
+    local re_ext='extension "([A-Za-z0-9_-]+)" (does not exist|is not available)'
+    local re_schema='schema "([A-Za-z0-9_-]+)" does not exist'
+    local re_func='function ([A-Za-z0-9_."]+)\([^)]*\) does not exist'
+    local re_rel='relation "([A-Za-z0-9_."-]+)" does not exist'
+    local re_role='role "([A-Za-z0-9_-]+)" does not exist'
+
+    local line kind name entry
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" == *"pg_restore: error:"* || "$line" =~ ^ERROR: ]] || continue
+        RESTORE_ERR_TOTAL=$(( RESTORE_ERR_TOTAL + 1 ))
+        kind="" name=""
+        if [[ "$line" =~ $re_ext ]]; then
+            kind=extension name="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ $re_schema ]]; then
+            kind=schema name="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ $re_func ]]; then
+            kind=function name="${BASH_REMATCH[1]//\"/}"
+        elif [[ "$line" =~ $re_rel ]]; then
+            kind=relation name="${BASH_REMATCH[1]//\"/}"
+        elif [[ "$line" =~ $re_role ]]; then
+            kind=role name="${BASH_REMATCH[1]}"
+        fi
+        if [[ -n "$kind" ]] && spilo_artifact_tolerated "$kind" "$name"; then
+            RESTORE_ERR_TOLERATED=$(( RESTORE_ERR_TOLERATED + 1 ))
+            entry="${kind} ${name}"
+            if [[ $'\n'"${RESTORE_ERR_TOLERATED_IDS}"$'\n' != *$'\n'"${entry}"$'\n'* ]]; then
+                if [[ -n "$RESTORE_ERR_TOLERATED_IDS" ]]; then
+                    RESTORE_ERR_TOLERATED_IDS+=$'\n'"$entry"
+                else
+                    RESTORE_ERR_TOLERATED_IDS="$entry"
+                fi
+            fi
+        else
+            RESTORE_ERR_BLOCKING=$(( RESTORE_ERR_BLOCKING + 1 ))
+        fi
+    done < "$file"
+    return 0
+}
+
+# Render RESTORE_ERR_TOLERATED_IDS as "extension bg_mon, schema
+# metric_helpers, ..." capped at 10 identifiers ("+N more" beyond that).
+restore_tolerated_summary() {
+    local cap=10 shown=0 total=0 out="" entry
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        total=$(( total + 1 ))
+        if (( shown < cap )); then
+            out+="${out:+, }${entry}"
+            shown=$(( shown + 1 ))
+        fi
+    done <<<"$RESTORE_ERR_TOLERATED_IDS"
+    if (( total > shown )); then
+        out+=" +$(( total - shown )) more"
+    fi
+    echo "$out"
+}
+
+# ---------------------------------------------------------------------------
 # Phases
 # ---------------------------------------------------------------------------
 
@@ -391,7 +510,7 @@ restore_globals() {
 }
 
 restore_databases() {
-    local t0=$SECONDS db prefix dumpfile errors summary rc
+    local t0=$SECONDS db prefix dumpfile summary rc tol_note
     for db in "${RESTORE_DBS[@]}"; do
         prefix=$(db_prefix "$db")
         dumpfile="$RESTORE_WORK_DIR/plain/${db}.dump"
@@ -411,16 +530,25 @@ restore_databases() {
             "$dumpfile" 2>"$RESTORE_STDERR_DIR/restore-${db}.stderr" || rc=$?
 
         # No --exit-on-error: collect the full error inventory, then assert
-        # it is empty (count only — stderr can embed row values).
-        errors=$(grep -c 'pg_restore: error:' "$RESTORE_STDERR_DIR/restore-${db}.stderr" 2>/dev/null || true)
-        errors=${errors:-0}
+        # no BLOCKING errors remain (counts only — stderr can embed row
+        # values). Whitelisted Spilo missing-object errors are tolerated:
+        # they are drill-only (vanilla postgres:16 target) and would not
+        # occur in real DR onto Spilo. pg_restore exits 1 whenever any error
+        # was ignored, so rc=1 is acceptable iff every error was tolerated.
+        restore_classify_errors "$RESTORE_STDERR_DIR/restore-${db}.stderr"
         summary=$(stderr_summarize "$RESTORE_STDERR_DIR/restore-${db}.stderr")
         error_class_add "$db" "$summary"
-        if [[ "$errors" -eq 0 && "$rc" -eq 0 ]]; then
-            check_add "${prefix}.restore_errors" "0 pg_restore errors" "0 (stderr: ${summary})" true
+        tol_note=""
+        if (( RESTORE_ERR_TOLERATED > 0 )); then
+            tol_note=" (${RESTORE_ERR_TOLERATED} tolerated Spilo artifacts: $(restore_tolerated_summary))"
+        fi
+        if (( RESTORE_ERR_BLOCKING == 0 )) \
+            && { [[ "$rc" -eq 0 ]] || { [[ "$rc" -eq 1 ]] && (( RESTORE_ERR_TOLERATED > 0 )); }; }; then
+            check_add "${prefix}.restore_errors" "0 blocking pg_restore errors" \
+                "0 blocking errors${tol_note} (stderr: ${summary})" true
         else
-            check_add "${prefix}.restore_errors" "0 pg_restore errors" \
-                "${errors} errors, rc=${rc} (stderr: ${summary})" false
+            check_add "${prefix}.restore_errors" "0 blocking pg_restore errors" \
+                "${RESTORE_ERR_BLOCKING} blocking of ${RESTORE_ERR_TOTAL} errors, rc=${rc}${tol_note} (stderr: ${summary})" false
         fi
         rm -f "$dumpfile"
     done
@@ -599,10 +727,12 @@ validate_database() {
     for name in index_count fk_count trigger_count; do
         want=$(jq -r --arg db "$db" --arg k "$name" \
             '.databases[] | select(.name == $db) | .validation[$k]' "$RESTORE_WORK_DIR/manifest.json")
+        # Shared public-schema-scoped SQL from lib/pg.sh — the manifest side
+        # runs the exact same statements, so both sides compare like for like.
         case "$name" in
-            index_count) query="SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public'" ;;
-            fk_count) query="SELECT COUNT(*) FROM pg_constraint WHERE contype='f'" ;;
-            trigger_count) query="SELECT COUNT(*) FROM pg_trigger WHERE NOT tgisinternal" ;;
+            index_count) query="$PG_SQL_INDEX_COUNT" ;;
+            fk_count) query="$PG_SQL_FK_COUNT" ;;
+            trigger_count) query="$PG_SQL_TRIGGER_COUNT" ;;
         esac
         got_n=$(rq "$db" "$query")
         if [[ "$got_n" == "$want" ]]; then
@@ -627,27 +757,65 @@ validate_database() {
         check_add "${prefix}.sequences" "0 reset sequences on non-empty tables" "${seq_bad:-error}" false
     fi
 
-    # chat-api app-layer encrypted columns: format/count only (decryption
-    # needs chat-api's ENCRYPTION_KEY and is out of drill scope).
+    # chat-api app-layer encrypted columns: fidelity vs the manifest
+    # (decryption needs chat-api's ENCRYPTION_KEY and is out of drill scope).
     if [[ "$db" == "chat_api" ]]; then
-        local cols col bad_rows="" checked=0
-        cols=$(rq "$db" "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_instances' AND column_name LIKE '%token%' AND data_type IN ('text','character varying')")
-        for col in $cols; do
-            valid_identifier "$col" || continue
-            checked=$(( checked + 1 ))
-            got=$(rq "$db" "SELECT COUNT(*) FROM public.agent_instances WHERE \"${col}\" IS NOT NULL AND \"${col}\" !~ '^[A-Za-z0-9+/=_-]{24,}$'")
-            [[ "$got" == "0" ]] || bad_rows="${bad_rows} ${col}:${got}"
-        done
-        if [[ "$checked" -eq 0 ]]; then
-            check_add "chat_api.encrypted_columns_format" "token columns ciphertext-shaped" \
-                "no token columns found (format check skipped)" true
-        elif [[ -z "$bad_rows" ]]; then
-            check_add "chat_api.encrypted_columns_format" "token columns ciphertext-shaped" \
-                "${checked} columns, 0 malformed values" true
-        else
-            check_add "chat_api.encrypted_columns_format" "token columns ciphertext-shaped" \
-                "malformed:${bad_rows}" false
+        validate_encrypted_fidelity "$db"
+    fi
+}
+
+# chat-api encrypted token columns, FIDELITY semantics: the manifest records
+# per column how many values were NON NULL (total) and ciphertext-shaped per
+# PG_CIPHERTEXT_REGEX (wellformed) at dump time; the restored database must
+# show the same distribution. An absolute "everything ciphertext-shaped"
+# check is wrong — staging legitimately carries dev-shaped token values, and
+# the drill validates the RESTORE, not the source data. Manifests from
+# before encrypted_format capture skip the check (SKIPPED-pass) rather than
+# fail on source shape.
+validate_encrypted_fidelity() {
+    local db="$1"
+    local encfmt
+    encfmt=$(jq -c --arg db "$db" \
+        '.databases[] | select(.name == $db) | .validation.encrypted_format // "absent"' \
+        "$RESTORE_WORK_DIR/manifest.json")
+    if [[ "$encfmt" == '"absent"' || -z "$encfmt" ]]; then
+        check_add "chat_api.encrypted_columns_fidelity" \
+            "token columns total+wellformed == manifest" \
+            "manifest predates encrypted_format capture (check skipped)" true
+        return 0
+    fi
+
+    local cols_total=0 bad="" key want_total want_well tbl col pair got_total got_well
+    while IFS=$'\t' read -r key want_total want_well; do
+        [[ -n "$key" ]] || continue
+        cols_total=$(( cols_total + 1 ))
+        tbl="${key%%.*}"
+        col="${key#*.}"
+        if ! valid_identifier "$tbl" || ! valid_identifier "$col"; then
+            bad="${bad} ${key}(bad-identifier)"
+            continue
         fi
+        pair=$(rq "$db" "SELECT COUNT(\"${col}\") || ' ' || COUNT(*) FILTER (WHERE \"${col}\" ~ '${PG_CIPHERTEXT_REGEX}') FROM public.\"${tbl}\"") || pair=""
+        got_total="${pair%% *}"
+        got_well="${pair##* }"
+        if [[ "$got_total" != "$want_total" || "$got_well" != "$want_well" ]]; then
+            bad="${bad} ${col}:total=${got_total:-err}/${want_total},wellformed=${got_well:-err}/${want_well}"
+        fi
+    done < <(jq -r 'to_entries[] | [.key, (.value.total | tostring), (.value.wellformed | tostring)] | @tsv' \
+        <<<"$encfmt")
+
+    if (( cols_total == 0 )); then
+        check_add "chat_api.encrypted_columns_fidelity" \
+            "token columns total+wellformed == manifest" \
+            "no encrypted columns recorded at dump time" true
+    elif [[ -z "$bad" ]]; then
+        check_add "chat_api.encrypted_columns_fidelity" \
+            "token columns total+wellformed == manifest" \
+            "${cols_total} columns, distribution matches" true
+    else
+        check_add "chat_api.encrypted_columns_fidelity" \
+            "token columns total+wellformed == manifest" \
+            "mismatch:${bad}" false
     fi
 }
 

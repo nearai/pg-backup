@@ -12,7 +12,8 @@ collect_fixture() {
     jq -n '{migrations: {table: "refinery_schema_history", max_version: 63, row_count: 62},
             validation: {snapshot_consistent: true,
                          tables: {organizations: {count: 12, max_created_at: "2026-07-28 01:02:03+00"}},
-                         index_count: 40, fk_count: 11, trigger_count: 13}}'
+                         index_count: 40, fk_count: 11, trigger_count: 13,
+                         encrypted_format: {"agent_instances.token": {total: 9, wellformed: 8}}}}'
 }
 
 @test "manifest_db_entry: shape and values" {
@@ -29,6 +30,7 @@ collect_fixture() {
     [ "$(jq -r '.migrations.max_version' <<<"$entry")" = "63" ]
     [ "$(jq -r '.validation.tables.organizations.count' <<<"$entry")" = "12" ]
     [ "$(jq -r '.validation.snapshot_consistent' <<<"$entry")" = "true" ]
+    [ "$(jq -r '.validation.encrypted_format."agent_instances.token".wellformed' <<<"$entry")" = "8" ]
 }
 
 @test "manifest_db_entry: null migrations pass through (rag_service)" {

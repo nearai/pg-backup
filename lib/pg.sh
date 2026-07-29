@@ -18,6 +18,22 @@
 PG_REP_TABLES_POSTGRES="organizations users workspaces api_keys models organization_usage_log responses response_items organization_balance"
 PG_REP_TABLES_CHAT_API="users oauth_accounts sessions conversations user_usage_event agent_instances subscriptions stripe_customers"
 
+# Structural-count SQL, shared verbatim by the backup manifest (here) and
+# the restore drill (lib/restore.sh) so both sides count like for like.
+# Scoped to relations in the 'public' schema: the Spilo source image carries
+# housekeeping objects in its own schemas (metric_helpers, zalando, ...)
+# that do not exist on the vanilla postgres:16 drill instance and must not
+# skew the counts either way.
+PG_SQL_INDEX_COUNT="SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public'"
+PG_SQL_FK_COUNT="SELECT COUNT(*) FROM pg_constraint co JOIN pg_class c ON co.conrelid = c.oid JOIN pg_namespace n ON c.relnamespace = n.oid WHERE co.contype = 'f' AND n.nspname = 'public'"
+PG_SQL_TRIGGER_COUNT="SELECT COUNT(*) FROM pg_trigger t JOIN pg_class c ON t.tgrelid = c.oid JOIN pg_namespace n ON c.relnamespace = n.oid WHERE NOT t.tgisinternal AND n.nspname = 'public'"
+
+# App-layer ciphertext shape (chat-api encrypted token columns). The manifest
+# records each probed column's value distribution against this regex at dump
+# time; the drill re-measures after restore and asserts EQUALITY (fidelity) —
+# never absolute format, since staging legitimately carries dev-shaped values.
+PG_CIPHERTEXT_REGEX='^[A-Za-z0-9+/=_-]{24,}$'
+
 pg_rep_tables() {
     local db="$1"
     case "$db" in
@@ -262,13 +278,45 @@ pg_collect_validation() {
     fi
 
     local index_count fk_count trigger_count
-    pg_run_query "$runner" "$db" "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public'" || return 1
+    pg_run_query "$runner" "$db" "$PG_SQL_INDEX_COUNT" || return 1
     index_count="$PG_RUN_RESULT"
-    pg_run_query "$runner" "$db" "SELECT COUNT(*) FROM pg_constraint WHERE contype='f'" || return 1
+    pg_run_query "$runner" "$db" "$PG_SQL_FK_COUNT" || return 1
     fk_count="$PG_RUN_RESULT"
-    pg_run_query "$runner" "$db" "SELECT COUNT(*) FROM pg_trigger WHERE NOT tgisinternal" || return 1
+    pg_run_query "$runner" "$db" "$PG_SQL_TRIGGER_COUNT" || return 1
     trigger_count="$PG_RUN_RESULT"
     [[ "$index_count" =~ ^[0-9]+$ && "$fk_count" =~ ^[0-9]+$ && "$trigger_count" =~ ^[0-9]+$ ]] || return 1
+
+    # chat-api app-layer encrypted token columns: record how many values are
+    # NON NULL (total) and how many are ciphertext-shaped (wellformed) per
+    # column, in the same snapshot session as the other counts. The drill
+    # asserts the restored distribution EQUALS this — fidelity, not absolute
+    # format (staging carries dev-shaped token values legitimately).
+    local encrypted_format_json="null"
+    if [[ "$db" == "chat_api" ]]; then
+        encrypted_format_json="{}"
+        pg_run_query "$runner" "$db" "SELECT to_regclass('public.agent_instances') IS NOT NULL" || return 1
+        if [[ "$PG_RUN_RESULT" == "t" ]]; then
+            local enc_cols enc_col pair enc_total enc_well
+            pg_run_query "$runner" "$db" \
+                "SELECT COALESCE(string_agg(column_name, ' ' ORDER BY column_name), '') FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_instances' AND column_name LIKE '%token%' AND data_type IN ('text','character varying')" \
+                || return 1
+            enc_cols="$PG_RUN_RESULT"
+            for enc_col in $enc_cols; do
+                [[ "$enc_col" =~ ^[a-z_][a-z0-9_]*$ ]] || continue
+                pg_run_query "$runner" "$db" \
+                    "SELECT COUNT(\"${enc_col}\") || ' ' || COUNT(*) FILTER (WHERE \"${enc_col}\" ~ '${PG_CIPHERTEXT_REGEX}') FROM public.agent_instances" \
+                    || return 1
+                pair="$PG_RUN_RESULT"
+                enc_total="${pair%% *}"
+                enc_well="${pair##* }"
+                [[ "$enc_total" =~ ^[0-9]+$ && "$enc_well" =~ ^[0-9]+$ ]] || return 1
+                encrypted_format_json=$(jq -c --arg k "agent_instances.${enc_col}" \
+                    --argjson t "$enc_total" --argjson w "$enc_well" \
+                    '. + {($k): {total: $t, wellformed: $w}}' \
+                    <<<"$encrypted_format_json") || return 1
+            done
+        fi
+    fi
 
     # shellcheck disable=SC2034  # consumed by the entrypoint run loop
     PG_COLLECT_JSON=$(jq -n \
@@ -278,8 +326,11 @@ pg_collect_validation() {
         --argjson index_count "$index_count" \
         --argjson fk_count "$fk_count" \
         --argjson trigger_count "$trigger_count" \
+        --argjson encrypted_format "$encrypted_format_json" \
         '{migrations: $migrations,
-          validation: {snapshot_consistent: $snapshot_consistent, tables: $tables,
-                       index_count: $index_count, fk_count: $fk_count,
-                       trigger_count: $trigger_count}}')
+          validation: ({snapshot_consistent: $snapshot_consistent, tables: $tables,
+                        index_count: $index_count, fk_count: $fk_count,
+                        trigger_count: $trigger_count}
+                       + (if $encrypted_format == null then {}
+                          else {encrypted_format: $encrypted_format} end))}')
 }

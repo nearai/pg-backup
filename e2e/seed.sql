@@ -92,6 +92,10 @@ CREATE TABLE agent_instances (
 );
 INSERT INTO agent_instances (name, token)
 SELECT 'agent-' || g, md5(g::text) || md5((g + 1)::text) FROM generate_series(1, 8) g;
+-- One deliberately non-ciphertext-shaped value: the manifest records the
+-- distribution (9 total / 8 wellformed) and the drill asserts the restored
+-- distribution EQUALS it — fidelity, not absolute format.
+INSERT INTO agent_instances (name, token) VALUES ('agent-dev', 'dev token 9');
 
 -- db "rag_service" (no migrations table, no app contract: existence,
 -- error-free restore + index count only)
