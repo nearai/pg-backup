@@ -51,6 +51,15 @@ check_add() {
 phase_record() {
     local name="$1" seconds="$2"
     echo "${name} ${seconds}" >> "$RESTORE_PHASES_FILE"
+    progress_put "$name"
+}
+
+# Sanitized liveness marker for the workflow's await step: phase name and
+# timestamp only, uploaded best-effort so a marker gap never fails a drill.
+# Its absence is itself diagnostic (driver never started or has no egress).
+progress_put() {
+    local phase="$1"
+    jq -n --arg d "${DRILL_ID:-unset}" --arg p "$phase" --arg t "$(date -u +%FT%TZ)"         '{drill_id: $d, phase: $p, at: $t}'         | aws s3 cp - "s3://${RESTORE_S3_BUCKET}/${RESTORE_REPORT_PREFIX}/${DRILL_ID}.progress.json"             >/dev/null 2>&1         || log_warn "progress marker upload failed (phase ${phase})"
 }
 
 error_class_add() {
@@ -721,6 +730,9 @@ restore_main() {
     : > "$RESTORE_PHASES_FILE"
     RESTORE_STARTED_AT=$(date -u +%FT%TZ)
     RESTORE_START_EPOCH=$(date +%s)
+    # First S3 write of the driver: proves the driver is up AND has egress
+    # before any long-running work begins.
+    progress_put driver_started
     DRILL_PGPASSWORD="$RESTORE_PG_PASSWORD"
     trap restore_on_exit EXIT
 
