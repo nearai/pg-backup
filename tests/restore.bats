@@ -251,3 +251,22 @@ JSON
     [ "$(fidelity_check_json | jq -r '.pass')" = "true" ]
     [[ "$(fidelity_check_json | jq -r '.observed')" == *"no encrypted columns recorded"* ]]
 }
+
+@test "classifier: blocking identifiers reported, unclassified only counted" {
+    tmp=$(mktemp)
+    cat > "$tmp" <<'STDERR'
+pg_restore: error: could not execute query: ERROR:  extension "nonexistent_ext" does not exist
+pg_restore: error: could not execute query: ERROR:  schema "customschema" does not exist
+pg_restore: error: could not execute query: ERROR:  duplicate key value violates unique constraint "users_pkey"
+DETAIL:  Key (id)=(42) already exists.
+STDERR
+    run bash -c "source lib/log.sh; source lib/pg.sh; source lib/restore.sh; restore_classify_errors '$tmp'; echo \"B=\$RESTORE_ERR_BLOCKING U=\$RESTORE_ERR_BLOCKING_UNCLASSIFIED\"; restore_blocking_summary"
+    rm -f "$tmp"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"B=3 U=1"* ]]
+    [[ "$output" == *"extension nonexistent_ext"* ]]
+    [[ "$output" == *"schema customschema"* ]]
+    [[ "$output" == *"1 unclassified"* ]]
+    [[ "$output" != *"users_pkey"* ]] || false
+    [[ "$output" != *"Key (id)"* ]] || false
+}

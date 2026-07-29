@@ -5,7 +5,10 @@
 # == backup complete; partial prefixes are never referenced and are reaped
 # by the bucket lifecycle.
 
-MANIFEST_FORMAT_VERSION=1
+# 2: structural counts (index/fk/trigger) are public-schema-scoped and
+#    validation carries encrypted_format; drills compare those strictly
+#    only for manifests at >= 2.
+MANIFEST_FORMAT_VERSION=2
 LATEST_KEY="control/latest.json"
 LATEST_PENDING_FILE="/run/backup/latest.pending.json"
 

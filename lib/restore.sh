@@ -252,6 +252,8 @@ restore_classify_errors() {
     RESTORE_ERR_TOLERATED=0
     RESTORE_ERR_BLOCKING=0
     RESTORE_ERR_TOLERATED_IDS=""
+    RESTORE_ERR_BLOCKING_IDS=""
+    RESTORE_ERR_BLOCKING_UNCLASSIFIED=0
     [[ -s "$file" ]] || return 0
 
     # "is not available" is what CREATE EXTENSION emits when the extension
@@ -291,9 +293,46 @@ restore_classify_errors() {
             fi
         else
             RESTORE_ERR_BLOCKING=$(( RESTORE_ERR_BLOCKING + 1 ))
+            # Blocking identifiers are object names (schema-level metadata,
+            # never row data) and are essential for whitelist triage. Lines
+            # with no extractable identifier are only COUNTED — their text may
+            # embed values and never reaches the report.
+            if [[ -n "$kind" ]]; then
+                entry="${kind} ${name}"
+                if [[ $'\n'"${RESTORE_ERR_BLOCKING_IDS}"$'\n' != *$'\n'"${entry}"$'\n'* ]]; then
+                    if [[ -n "$RESTORE_ERR_BLOCKING_IDS" ]]; then
+                        RESTORE_ERR_BLOCKING_IDS+=$'\n'"$entry"
+                    else
+                        RESTORE_ERR_BLOCKING_IDS="$entry"
+                    fi
+                fi
+            else
+                RESTORE_ERR_BLOCKING_UNCLASSIFIED=$(( RESTORE_ERR_BLOCKING_UNCLASSIFIED + 1 ))
+            fi
         fi
     done < "$file"
     return 0
+}
+
+# Render RESTORE_ERR_BLOCKING_IDS like restore_tolerated_summary, appending
+# the count of unclassified (identifier-free) blocking errors.
+restore_blocking_summary() {
+    local cap=10 shown=0 total=0 out="" entry
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        total=$(( total + 1 ))
+        if (( shown < cap )); then
+            out+="${out:+, }${entry}"
+            shown=$(( shown + 1 ))
+        fi
+    done <<<"$RESTORE_ERR_BLOCKING_IDS"
+    if (( total > shown )); then
+        out+=" +$(( total - shown )) more"
+    fi
+    if (( RESTORE_ERR_BLOCKING_UNCLASSIFIED > 0 )); then
+        out+="${out:+, }${RESTORE_ERR_BLOCKING_UNCLASSIFIED} unclassified"
+    fi
+    echo "$out"
 }
 
 # Render RESTORE_ERR_TOLERATED_IDS as "extension bg_mon, schema
@@ -548,7 +587,7 @@ restore_databases() {
                 "0 blocking errors${tol_note} (stderr: ${summary})" true
         else
             check_add "${prefix}.restore_errors" "0 blocking pg_restore errors" \
-                "${RESTORE_ERR_BLOCKING} blocking of ${RESTORE_ERR_TOTAL} errors, rc=${rc}${tol_note} (stderr: ${summary})" false
+                "${RESTORE_ERR_BLOCKING} blocking of ${RESTORE_ERR_TOTAL} errors [$(restore_blocking_summary)], rc=${rc}${tol_note} (stderr: ${summary})" false
         fi
         rm -f "$dumpfile"
     done
@@ -722,9 +761,19 @@ validate_database() {
         fi
     fi
 
-    # Index / FK / trigger counts vs manifest.
+    # Index / FK / trigger counts vs manifest. Manifests below format 2 were
+    # produced with GLOBAL (unscoped) counts; comparing them against the
+    # drill's public-schema-scoped counts is apples to oranges — skip-pass
+    # with a note until the backup side runs a format>=2 image.
+    local manifest_format
+    manifest_format=$(jq -r '.format_version // 1' "$RESTORE_WORK_DIR/manifest.json")
     local want got_n name query
     for name in index_count fk_count trigger_count; do
+        if (( manifest_format < 2 )); then
+            check_add "${prefix}.${name}" "manifest format >= 2" \
+                "skipped: manifest format ${manifest_format} predates public-schema-scoped counts" true
+            continue
+        fi
         want=$(jq -r --arg db "$db" --arg k "$name" \
             '.databases[] | select(.name == $db) | .validation[$k]' "$RESTORE_WORK_DIR/manifest.json")
         # Shared public-schema-scoped SQL from lib/pg.sh — the manifest side
