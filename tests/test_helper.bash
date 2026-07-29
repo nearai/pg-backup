@@ -20,6 +20,10 @@ source_entrypoint() {
 
     # shellcheck disable=SC1091
     source "$root/entrypoint.sh"
-    set +e +u
-    set +o pipefail
+    # Undo ONLY nounset from the entrypoint's strict mode (bats internals read
+    # unset vars); errexit MUST stay on — bats detects assertion failures via
+    # errexit, and disabling it makes every test pass unconditionally (which
+    # is exactly what happened: mutation-testing showed impossible assertions
+    # passing until this line was fixed).
+    set +u
 }

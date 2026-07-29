@@ -208,7 +208,7 @@ valid_identifier() {
 # identifiers (infra metadata, never row data) may appear in the report.
 # ---------------------------------------------------------------------------
 SPILO_ARTIFACT_EXTENSIONS=(bg_mon pg_auth_mon pg_cron pg_stat_kcache set_user
-    pg_permissions file_fdw pg_stat_statements)
+    pg_permissions file_fdw pg_stat_statements plpython3u plpythonu)
 SPILO_ARTIFACT_SCHEMAS=(metric_helpers user_management robot_zmon zalando admin cron zmon_utils)
 # Members that Spilo extensions install into the PUBLIC schema; DROP/COMMENT
 # statements in dumps reference them by qualified public.* name.

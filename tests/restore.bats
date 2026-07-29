@@ -252,38 +252,39 @@ JSON
     [[ "$(fidelity_check_json | jq -r '.observed')" == *"no encrypted columns recorded"* ]]
 }
 
-@test "classifier: blocking identifiers reported, unclassified only counted" {
-    tmp=$(mktemp)
-    cat > "$tmp" <<'STDERR'
-pg_restore: error: could not execute query: ERROR:  extension "nonexistent_ext" does not exist
-pg_restore: error: could not execute query: ERROR:  schema "customschema" does not exist
-pg_restore: error: could not execute query: ERROR:  duplicate key value violates unique constraint "users_pkey"
-DETAIL:  Key (id)=(42) already exists.
-STDERR
-    run bash -c "source lib/log.sh; source lib/pg.sh; source lib/restore.sh; restore_classify_errors '$tmp'; echo \"B=\$RESTORE_ERR_BLOCKING U=\$RESTORE_ERR_BLOCKING_UNCLASSIFIED\"; restore_blocking_summary"
-    rm -f "$tmp"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"B=3 U=1"* ]]
-    [[ "$output" == *"extension nonexistent_ext"* ]]
-    [[ "$output" == *"schema customschema"* ]]
-    [[ "$output" == *"1 unclassified"* ]]
-    [[ "$output" != *"users_pkey"* ]] || false
-    [[ "$output" != *"Key (id)"* ]] || false
+
+@test "classify_errors: blocking identifiers surfaced, unclassified only counted" {
+    local f="$BATS_TEST_TMPDIR/stderr"
+    {
+        echo 'pg_restore: error: could not execute query: ERROR:  extension "nonexistent_ext" does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  schema "customschema" does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  duplicate key value violates unique constraint "users_pkey"'
+        echo 'DETAIL:  Key (id)=(42) already exists.'
+    } > "$f"
+    restore_classify_errors "$f"
+    [ "$RESTORE_ERR_BLOCKING" = "3" ]
+    [ "$RESTORE_ERR_BLOCKING_UNCLASSIFIED" = "1" ]
+    summary=$(restore_blocking_summary)
+    [[ "$summary" == *"extension nonexistent_ext"* ]]
+    [[ "$summary" == *"schema customschema"* ]]
+    [[ "$summary" == *"1 unclassified"* ]]
+    [[ "$summary" != *"users_pkey"* ]]
+    [[ "$summary" != *"Key (id)"* ]]
 }
 
-@test "classifier: attempt-10 blocking set now tolerated" {
-    tmp=$(mktemp)
-    cat > "$tmp" <<'STDERR'
-pg_restore: error: could not execute query: ERROR:  extension "plpython3u" does not exist
-pg_restore: error: could not execute query: ERROR:  language "plpython3u" does not exist
-pg_restore: error: could not execute query: ERROR:  schema "cron" does not exist
-pg_restore: error: could not execute query: ERROR:  relation "cron.jobid_seq" does not exist
-pg_restore: error: could not execute query: ERROR:  function zmon_utils.get_database_cluster_system_information() does not exist
-pg_restore: error: could not execute query: ERROR:  function public.set_user(text) does not exist
-pg_restore: error: could not execute query: ERROR:  relation "public.pg_auth_mon" does not exist
-STDERR
-    run bash -c "source lib/log.sh; source lib/pg.sh; source lib/restore.sh; restore_classify_errors '$tmp'; echo \"T=\$RESTORE_ERR_TOLERATED B=\$RESTORE_ERR_BLOCKING\""
-    rm -f "$tmp"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"T=7 B=0"* ]]
+@test "classify_errors: drill-attempt-10 blocking set is tolerated" {
+    local f="$BATS_TEST_TMPDIR/stderr"
+    {
+        echo 'pg_restore: error: could not execute query: ERROR:  extension "plpython3u" does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  language "plpython3u" does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  schema "cron" does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  relation "cron.jobid_seq" does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  function zmon_utils.get_database_cluster_system_information() does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  function public.set_user(text) does not exist'
+        echo 'pg_restore: error: could not execute query: ERROR:  relation "public.pg_auth_mon" does not exist'
+    } > "$f"
+    restore_classify_errors "$f"
+    [ "$RESTORE_ERR_TOTAL" = "7" ]
+    [ "$RESTORE_ERR_TOLERATED" = "7" ]
+    [ "$RESTORE_ERR_BLOCKING" = "0" ]
 }

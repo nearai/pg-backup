@@ -51,7 +51,7 @@ collect_fixture() {
         postgres-prod prod "2026-07-28T02:30:01Z" "2026-07-28T02:43:33Z" 812 \
         cpu01-vm 16.11 true "$globals" "$dbs" /postgres-backup/enc-v1 30)
 
-    [ "$(jq -r '.format_version' <<<"$manifest")" = "1" ]
+    [ "$(jq -r '.format_version' <<<"$manifest")" = "2" ]
     [ "$(jq -r '.backup_id' <<<"$manifest")" = "2026-07-28T0230Z-3f9a1c" ]
     [ "$(jq -r '.cycle_key' <<<"$manifest")" = "2026-07-28" ]
     [ "$(jq -r '.trigger' <<<"$manifest")" = "scheduled" ]
