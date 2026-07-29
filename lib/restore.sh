@@ -209,7 +209,10 @@ valid_identifier() {
 # ---------------------------------------------------------------------------
 SPILO_ARTIFACT_EXTENSIONS=(bg_mon pg_auth_mon pg_cron pg_stat_kcache set_user
     pg_permissions file_fdw pg_stat_statements)
-SPILO_ARTIFACT_SCHEMAS=(metric_helpers user_management robot_zmon zalando admin)
+SPILO_ARTIFACT_SCHEMAS=(metric_helpers user_management robot_zmon zalando admin cron zmon_utils)
+# Members that Spilo extensions install into the PUBLIC schema; DROP/COMMENT
+# statements in dumps reference them by qualified public.* name.
+SPILO_ARTIFACT_PUBLIC_MEMBERS=(set_user set_user_u reset_user pg_auth_mon pg_stat_kcache pg_stat_kcache_reset)
 
 # spilo_artifact_tolerated <kind> <identifier> → 0 if whitelisted.
 #   extension        — exact match against SPILO_ARTIFACT_EXTENSIONS
@@ -232,6 +235,17 @@ spilo_artifact_tolerated() {
         function | relation)
             for w in "${SPILO_ARTIFACT_SCHEMAS[@]}"; do
                 [[ "$name" == "$w".* ]] && return 0
+            done
+            # Spilo extensions install some members into public; dumps
+            # reference them as public.<member> (or bare <member>).
+            local base="${name#public.}"
+            for w in "${SPILO_ARTIFACT_PUBLIC_MEMBERS[@]}"; do
+                [[ "$base" == "$w" ]] && return 0
+            done
+            ;;
+        language)
+            for w in "${SPILO_ARTIFACT_EXTENSIONS[@]}"; do
+                [[ "$name" == "$w" ]] && return 0
             done
             ;;
     esac
@@ -264,6 +278,7 @@ restore_classify_errors() {
     local re_func='function ([A-Za-z0-9_."]+)\([^)]*\) does not exist'
     local re_rel='relation "([A-Za-z0-9_."-]+)" does not exist'
     local re_role='role "([A-Za-z0-9_-]+)" does not exist'
+    local re_lang='language "([A-Za-z0-9_]+)" does not exist'
 
     local line kind name entry
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -280,6 +295,8 @@ restore_classify_errors() {
             kind=relation name="${BASH_REMATCH[1]//\"/}"
         elif [[ "$line" =~ $re_role ]]; then
             kind=role name="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ $re_lang ]]; then
+            kind=language name="${BASH_REMATCH[1]}"
         fi
         if [[ -n "$kind" ]] && spilo_artifact_tolerated "$kind" "$name"; then
             RESTORE_ERR_TOLERATED=$(( RESTORE_ERR_TOLERATED + 1 ))

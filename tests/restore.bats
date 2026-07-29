@@ -270,3 +270,20 @@ STDERR
     [[ "$output" != *"users_pkey"* ]] || false
     [[ "$output" != *"Key (id)"* ]] || false
 }
+
+@test "classifier: attempt-10 blocking set now tolerated" {
+    tmp=$(mktemp)
+    cat > "$tmp" <<'STDERR'
+pg_restore: error: could not execute query: ERROR:  extension "plpython3u" does not exist
+pg_restore: error: could not execute query: ERROR:  language "plpython3u" does not exist
+pg_restore: error: could not execute query: ERROR:  schema "cron" does not exist
+pg_restore: error: could not execute query: ERROR:  relation "cron.jobid_seq" does not exist
+pg_restore: error: could not execute query: ERROR:  function zmon_utils.get_database_cluster_system_information() does not exist
+pg_restore: error: could not execute query: ERROR:  function public.set_user(text) does not exist
+pg_restore: error: could not execute query: ERROR:  relation "public.pg_auth_mon" does not exist
+STDERR
+    run bash -c "source lib/log.sh; source lib/pg.sh; source lib/restore.sh; restore_classify_errors '$tmp'; echo \"T=\$RESTORE_ERR_TOLERATED B=\$RESTORE_ERR_BLOCKING\""
+    rm -f "$tmp"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"T=7 B=0"* ]]
+}
