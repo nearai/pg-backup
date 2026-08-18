@@ -1,0 +1,263 @@
+{
+  "backup": {
+    "backup_id": "2026-01-01T0000Z-synthetic",
+    "completed_at": "2026-01-01T00:05:00Z",
+    "manifest_key": "backups/synthetic/manifest.json",
+    "manifest_sha256": "964619ddd626dae83e2703e1fffc683d3b59f4da14fe4f28657ca814354bb19c",
+    "started_at": "2026-01-01T00:00:00Z"
+  },
+  "checks": [
+    {
+      "expected": "manifest_complete",
+      "id": "cluster.manifest_complete",
+      "observed": "objects_present=3",
+      "pass": true
+    },
+    {
+      "expected": "checksum_mismatches=0",
+      "id": "cluster.ciphertext_sha256",
+      "observed": "checksum_mismatches=0;objects=3",
+      "pass": true
+    },
+    {
+      "expected": "decrypt_failures=0;checksum_mismatches=0",
+      "id": "cluster.plaintext_sha256",
+      "observed": "decrypt_failures=0;checksum_mismatches=0;objects=3",
+      "pass": true
+    },
+    {
+      "expected": "major=16",
+      "id": "cluster.pg_major",
+      "observed": "major=16",
+      "pass": true
+    },
+    {
+      "expected": "non_benign_errors=0",
+      "id": "cluster.globals_errors",
+      "observed": "non_benign_errors=0",
+      "pass": true
+    },
+    {
+      "expected": "login=ok",
+      "id": "cluster.app_role_connectivity",
+      "observed": "login=ok",
+      "pass": true
+    },
+    {
+      "expected": "blocking_errors=0",
+      "id": "cloud_api.restore_errors",
+      "observed": "blocking_errors=0;total_errors=0;tolerated_errors=0;return_code=0",
+      "pass": true
+    },
+    {
+      "expected": "blocking_errors=0",
+      "id": "chat_api.restore_errors",
+      "observed": "blocking_errors=0;total_errors=0;tolerated_errors=0;return_code=0",
+      "pass": true
+    },
+    {
+      "expected": "missing_databases=0",
+      "id": "cluster.databases_match",
+      "observed": "missing_databases=0;expected_databases=2",
+      "pass": true
+    },
+    {
+      "expected": "login_roles=2",
+      "id": "cluster.roles",
+      "observed": "login_roles=2",
+      "pass": true
+    },
+    {
+      "expected": "target=63;floor=63",
+      "id": "cloud_api.migration_version",
+      "observed": "value=63",
+      "pass": true
+    },
+    {
+      "expected": "target=62;floor=62",
+      "id": "cloud_api.migration_row_count",
+      "observed": "value=62",
+      "pass": true
+    },
+    {
+      "expected": "owner=postgres",
+      "id": "cloud_api.ownership",
+      "observed": "owner=postgres",
+      "pass": true
+    },
+    {
+      "expected": "extension=present",
+      "id": "cloud_api.uuid_ossp",
+      "observed": "extension=present",
+      "pass": true
+    },
+    {
+      "expected": "sentinels_present=2",
+      "id": "cloud_api.rename_sentinels",
+      "observed": "sentinels_present=2",
+      "pass": true
+    },
+    {
+      "expected": "table_count_mismatches=0",
+      "id": "cloud_api.table_counts",
+      "observed": "table_count_mismatches=0",
+      "pass": true
+    },
+    {
+      "expected": "timestamp_mismatches=0",
+      "id": "cloud_api.max_created_at",
+      "observed": "timestamp_mismatches=0",
+      "pass": true
+    },
+    {
+      "expected": "count=2",
+      "id": "cloud_api.index_count",
+      "observed": "count=2",
+      "pass": true
+    },
+    {
+      "expected": "count=1",
+      "id": "cloud_api.fk_count",
+      "observed": "count=1",
+      "pass": true
+    },
+    {
+      "expected": "count=1",
+      "id": "cloud_api.trigger_count",
+      "observed": "count=1",
+      "pass": true
+    },
+    {
+      "expected": "reset_sequences=0",
+      "id": "cloud_api.sequences",
+      "observed": "reset_sequences=0",
+      "pass": true
+    },
+    {
+      "expected": "target=34;floor=34",
+      "id": "chat_api.migration_version",
+      "observed": "value=34",
+      "pass": true
+    },
+    {
+      "expected": "target=33;floor=33",
+      "id": "chat_api.migration_row_count",
+      "observed": "value=33",
+      "pass": true
+    },
+    {
+      "expected": "owner=postgres",
+      "id": "chat_api.ownership",
+      "observed": "owner=postgres",
+      "pass": true
+    },
+    {
+      "expected": "extension=present",
+      "id": "chat_api.uuid_ossp",
+      "observed": "extension=present",
+      "pass": true
+    },
+    {
+      "expected": "table=absent",
+      "id": "chat_api.response_authors_absent",
+      "observed": "table=absent",
+      "pass": true
+    },
+    {
+      "expected": "table_count_mismatches=0",
+      "id": "chat_api.table_counts",
+      "observed": "table_count_mismatches=0",
+      "pass": true
+    },
+    {
+      "expected": "timestamp_mismatches=0",
+      "id": "chat_api.max_created_at",
+      "observed": "timestamp_mismatches=0",
+      "pass": true
+    },
+    {
+      "expected": "count=2",
+      "id": "chat_api.index_count",
+      "observed": "count=2",
+      "pass": true
+    },
+    {
+      "expected": "count=1",
+      "id": "chat_api.fk_count",
+      "observed": "count=1",
+      "pass": true
+    },
+    {
+      "expected": "count=1",
+      "id": "chat_api.trigger_count",
+      "observed": "count=1",
+      "pass": true
+    },
+    {
+      "expected": "reset_sequences=0",
+      "id": "chat_api.sequences",
+      "observed": "reset_sequences=0",
+      "pass": true
+    },
+    {
+      "expected": "encrypted_column_mismatches=0",
+      "id": "chat_api.encrypted_columns_fidelity",
+      "observed": "encrypted_column_mismatches=1;encrypted_columns=1",
+      "pass": false
+    },
+    {
+      "expected": "age_seconds<86400",
+      "id": "cluster.rpo_freshness",
+      "observed": "age_seconds=60",
+      "pass": true
+    },
+    {
+      "expected": "drifted_settings=0",
+      "id": "bucket.drift",
+      "observed": "drifted_settings=0",
+      "pass": true
+    },
+    {
+      "expected": "total_seconds<14400",
+      "id": "cluster.rto_within_target",
+      "observed": "total_seconds=300",
+      "pass": true
+    }
+  ],
+  "completed_at": "2026-01-01T00:15:00Z",
+  "diagnostics": {
+    "failure_category_counts": {
+      "connection": 1,
+      "disk": 2,
+      "resource": 3
+    },
+    "failure_category_counts_truncated": false,
+    "postgres_restart_observed": "unknown",
+    "restore_profile": "legacy-v1",
+    "scratch_disk_pressure": "high",
+    "scratch_disk_used_percent": 90
+  },
+  "drill_id": "synthetic-fail",
+  "error_classes": {},
+  "format_version": 1,
+  "notes": [
+    "prod app-role password is underivable outside prod by design; connectivity verified via ALTER ROLE + fresh SCRAM login"
+  ],
+  "rpo": {
+    "backup_age_seconds": 900,
+    "data_age_seconds": 60,
+    "target_seconds": 86400
+  },
+  "rto": {
+    "phases": {
+      "download": 60,
+      "restore": 180,
+      "validate": 60
+    },
+    "target_seconds": 14400,
+    "total_seconds": 300
+  },
+  "sizes": {},
+  "started_at": "2026-01-01T00:10:00Z",
+  "verdict": "FAIL"
+}

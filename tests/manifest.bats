@@ -67,6 +67,7 @@ collect_fixture() {
     [ "$(jq -r '.duration_seconds' <<<"$manifest")" = "812" ]
     [ "$(jq -r '.retention_days' <<<"$manifest")" = "30" ]
     [ "$(jq -r '.tool_versions.pg_dump' <<<"$manifest")" = "16.11" ]
+    [ "$(jq -r '.restore_profile' <<<"$manifest")" = "legacy-v1" ]
 }
 
 @test "manifest_build: snapshot fallback flips consistency" {
@@ -94,4 +95,54 @@ collect_fixture() {
     latest=$(latest_build id key ts "manual:manual-99" "")
     [ "$(jq -r '.trigger' <<<"$latest")" = "manual:manual-99" ]
     [ "$(jq '.last_scheduled_cycle' <<<"$latest")" = "null" ]
+}
+
+@test "manifest_restore_profile_resolve: missing, null, and legacy-v1 all resolve to legacy-v1" {
+    local fixture
+    for fixture in manifest-legacy-missing-profile.json manifest-legacy-null-profile.json \
+        manifest-legacy-v1.json; do
+        run manifest_restore_profile_resolve "$(repo_root)/tests/fixtures/$fixture"
+        [ "$status" -eq 0 ]
+        [ "$output" = "legacy-v1" ]
+    done
+}
+
+@test "manifest_restore_profile_resolve: every other type and value fails closed" {
+    local manifest="$BATS_TEST_TMPDIR/manifest.json" value
+    for value in '"future-v2"' 'false' '7' '[]' '{}'; do
+        jq -n --argjson value "$value" '{restore_profile: $value}' > "$manifest"
+        run manifest_restore_profile_resolve "$manifest"
+        [ "$status" -ne 0 ]
+        [ -z "$output" ]
+    done
+}
+
+@test "restore_download: invalid restore profile fails before any backup object download" {
+    source "$(repo_root)/lib/restore.sh"
+    RESTORE_WORK_DIR="$BATS_TEST_TMPDIR/work"
+    RESTORE_CHECKS_FILE="$RESTORE_WORK_DIR/checks.ndjson"
+    RESTORE_PHASES_FILE="$RESTORE_WORK_DIR/phases"
+    RESTORE_MANIFEST_KEY="backups/synthetic/manifest.json"
+    mkdir -p "$RESTORE_WORK_DIR/enc"
+    : > "$RESTORE_CHECKS_FILE"
+    : > "$RESTORE_PHASES_FILE"
+    jq -n '{format_version: 2, backup_id: "synthetic-backup",
+            databases: [], globals: {object: "globals.sql.gz.enc"},
+            encryption: {key_path: "/synthetic/key"},
+            restore_profile: "future-v2"}' > "$BATS_TEST_TMPDIR/source-manifest.json"
+    S3_GET_CALLS=0
+    s3_get_file() {
+        S3_GET_CALLS=$(( S3_GET_CALLS + 1 ))
+        cp "$BATS_TEST_TMPDIR/source-manifest.json" "$2"
+    }
+
+    local status=0
+    restore_download || status=$?
+
+    [ "$status" -ne 0 ]
+    [ "$S3_GET_CALLS" = "1" ]
+    [ "$(jq -r '.id' "$RESTORE_CHECKS_FILE")" = "cluster.manifest_complete" ]
+    [ "$(jq -r '.pass' "$RESTORE_CHECKS_FILE")" = "false" ]
+    [ "$(jq -r '.observed' "$RESTORE_CHECKS_FILE")" = "restore_profile_unsupported" ]
+    ! grep -q 'future-v2' "$RESTORE_CHECKS_FILE"
 }

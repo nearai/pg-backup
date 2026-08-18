@@ -1,0 +1,12 @@
+{
+  "format_version": 2,
+  "backup_id": "2026-01-01T0000Z-synthetic",
+  "started_at": "2026-01-01T00:00:00Z",
+  "completed_at": "2026-01-01T00:05:00Z",
+  "source": {"pg_version": "16.11"},
+  "encryption": {"key_path": "/synthetic/key"},
+  "globals": {"object": "globals.sql.gz.enc"},
+  "databases": [],
+  "retention_days": 30,
+  "tool_versions": {}
+}

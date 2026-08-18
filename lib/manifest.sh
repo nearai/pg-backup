@@ -9,8 +9,26 @@
 #    validation carries encrypted_format; drills compare those strictly
 #    only for manifests at >= 2.
 MANIFEST_FORMAT_VERSION=2
+RESTORE_PROFILE_LEGACY="legacy-v1"
 LATEST_KEY="control/latest.json"
 LATEST_PENDING_FILE="/run/backup/latest.pending.json"
+
+# Resolve the restore compatibility profile at the manifest trust boundary.
+# Historical manifests omitted it (or may carry null), which is legacy-v1.
+# Only the one implemented profile is accepted; invalid values produce no
+# output so callers cannot accidentally persist an attacker-controlled value.
+manifest_restore_profile_resolve() {
+    local manifest_file="$1"
+    jq -er --arg legacy "$RESTORE_PROFILE_LEGACY" '
+        if (has("restore_profile") | not) or .restore_profile == null then
+            $legacy
+        elif (.restore_profile | type) == "string" and .restore_profile == $legacy then
+            $legacy
+        else
+            empty
+        end
+    ' "$manifest_file" 2>/dev/null
+}
 
 # One per-database manifest entry.
 # Args: name object db_size_bytes plain_size cipher_size plain_sha cipher_sha
@@ -60,6 +78,7 @@ manifest_build() {
 
     jq -n \
         --argjson format_version "$MANIFEST_FORMAT_VERSION" \
+        --arg restore_profile "$RESTORE_PROFILE_LEGACY" \
         --arg backup_id "$backup_id" \
         --arg cycle_key "$cycle_key" \
         --arg trigger "$trigger" \
@@ -78,6 +97,7 @@ manifest_build() {
         --argjson tool_versions "$tool_versions" \
         --argjson retention_days "$retention_days" \
         '{format_version: $format_version,
+          restore_profile: $restore_profile,
           backup_id: $backup_id,
           cycle_key: $cycle_key,
           trigger: $trigger,
