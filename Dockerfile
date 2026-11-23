@@ -12,11 +12,14 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 # Alpine has no snapshot archive: if the v3.23 repo rolls a pinned version
 # out, the build fails loudly until the pins are refreshed — detected drift,
 # never silent. socat serves the metrics textfile on :9464 (the busybox in
-# this base is compiled without the httpd applet — verified).
+# this base is compiled without the httpd applet — verified). The second
+# group refreshes libraries inherited from the base image to the pinned
+# versions.
 RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt,ro \
     set -e; \
     to_install=""; \
-    for pkg in aws-cli jq curl openssl coreutils socat; do \
+    for pkg in aws-cli jq curl openssl coreutils socat \
+               krb5-libs musl musl-utils zlib libuuid xz-libs libxml2 libxslt; do \
         ver=$(grep "^${pkg}=" /tmp/pinned-packages.txt | cut -d= -f2-); \
         if [ -z "$ver" ]; then \
             echo "No pinned version for ${pkg} in pinned-packages.txt" >&2; \
